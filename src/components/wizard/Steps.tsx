@@ -136,32 +136,37 @@ export const DeclarationTypeStep: React.FC = () => {
       />
       
       {declarationType === 'after_deadline' && (
-        <InfoBox type="warning" title="기한후신고 안내">
-          법정 신고기한이 경과하여 무신고 가산세가 부과될 수 있습니다.
-          다만 기한후 1개월 이내 신고 시 50% 감면됩니다.
+        <InfoBox type="warning" title="기한후신고 가산세 안내">
+          법정 신고기한 경과로 무신고 가산세 및 납부지연 가산세가 부과됩니다.
+          신고 시점에 따른 무신고 가산세 감면율:
+          기한 후 1개월 이내 50%, 1~3개월 30%, 3~6개월 20% 감면
         </InfoBox>
       )}
       
       {declarationType === 'amended' && (
-        <Section title="기납부 세액 입력">
-          <div className="grid grid-cols-2 gap-4">
-            <NumberInput
-              label="당초 양도소득세"
-              value={transaction.returnMeta?.initialIncomeTax || 0}
-              onChange={(v) => setReturnMeta({ initialIncomeTax: v })}
-              suffix="원"
-            />
-            <NumberInput
-              label="당초 농어촌특별세"
-              value={transaction.returnMeta?.initialNongteukse || 0}
-              onChange={(v) => setReturnMeta({ initialNongteukse: v })}
-              suffix="원"
-            />
-          </div>
-          <InfoBox type="info">
-            수정신고 시 추가 납부세액에 대해 과소신고 가산세가 부과됩니다.
+        <>
+          <Section title="기납부 세액 입력">
+            <div className="grid grid-cols-2 gap-4">
+              <NumberInput
+                label="당초 양도소득세"
+                value={transaction.returnMeta?.initialIncomeTax || 0}
+                onChange={(v) => setReturnMeta({ initialIncomeTax: v })}
+                suffix="원"
+              />
+              <NumberInput
+                label="당초 농어촌특별세"
+                value={transaction.returnMeta?.initialNongteukse || 0}
+                onChange={(v) => setReturnMeta({ initialNongteukse: v })}
+                suffix="원"
+              />
+            </div>
+          </Section>
+          <InfoBox type="warning" title="수정신고 가산세 안내">
+            수정신고 시 추가 납부세액에 대해 과소신고 가산세 및 납부지연 가산세가 부과됩니다.
+            수정신고 시점에 따른 과소신고 가산세 감면율:
+            법정기한 후 1개월 이내 90%, 1~3개월 75%, 3~6개월 50%, 6개월~1년 30%, 1~1.5년 20%, 1.5~2년 10% 감면
           </InfoBox>
-        </Section>
+        </>
       )}
       
       <Section title="신고/납부 일자">
@@ -354,6 +359,14 @@ export const TransactionStep: React.FC = () => {
   
   const acquisitionCause = transaction.deal?.acquisitionCause;
   const showOrigDate = acquisitionCause === 'inheritance' || acquisitionCause === 'gift_carryover';
+  const showOrigAcquisitionCause = acquisitionCause === 'gift_carryover';
+  
+  // 이월과세 최초 취득원인 선택지
+  const origAcquisitionCauseOptions = [
+    { id: 'purchase', label: '매매', icon: <Briefcase size={18} /> },
+    { id: 'inheritance', label: '상속', icon: <FileText size={18} /> },
+    { id: 'gift', label: '증여', icon: <Gift size={18} /> },
+  ];
   
   return (
     <StepContainer
@@ -403,6 +416,23 @@ export const TransactionStep: React.FC = () => {
             hint="세율 및 장기보유특별공제 기산일로 사용됩니다."
           />
         )}
+        
+        {showOrigAcquisitionCause && (
+          <div className="mt-4">
+            <label className="block text-sm font-semibold text-slate-700 mb-2">
+              당초 증여자 취득원인
+            </label>
+            <CardSelection
+              options={origAcquisitionCauseOptions}
+              value={transaction.deal?.origAcquisitionCause || 'purchase'}
+              onChange={(v) => setDeal({ origAcquisitionCause: v as 'purchase' | 'inheritance' | 'gift' })}
+              columns={3}
+            />
+            <p className="text-xs text-slate-500 mt-2">
+              당초 증여자의 취득원인에 따라 취득가액 계산방법이 달라집니다.
+            </p>
+          </div>
+        )}
       </Section>
       
       {transaction.deal?.transferCause === 'burden_gift' && (
@@ -425,6 +455,95 @@ export const AmountsStep: React.FC = () => {
   const isBurdenGift = transaction.deal?.transferCause === 'burden_gift';
   const isHighPriceHouse = transaction.asset?.type === 'high_price_house';
   
+  // 부담부증여 + 보충적평가(기준시가) 여부
+  const isBurdenGiftOfficial = isBurdenGift && transaction.amounts?.giftEvalMethod === 'official';
+  
+  // ---------------------------------------------------------------------------
+  // 취득원인에 따른 취득가액 계산방법 분기 로직
+  // ---------------------------------------------------------------------------
+  const acquisitionCause = transaction.deal?.acquisitionCause;
+  const origAcquisitionCause = transaction.deal?.origAcquisitionCause;
+  
+  /**
+   * 취득원인이 상속, 증여, 이월과세(최초 상속/증여)인지 판단
+   * - 상속/증여: 실지거래가액이 존재하지 않으므로 환산취득가액 사용 불가
+   * - 세법상 기준시가 또는 상속세/증여세 평가액만 사용 가능
+   */
+  const isInheritanceOrGiftType = (): boolean => {
+    // 상속
+    if (acquisitionCause === 'inheritance') return true;
+    // 증여
+    if (acquisitionCause === 'gift') return true;
+    // 이월과세 중 최초 취득원인이 상속 또는 증여인 경우
+    if (acquisitionCause === 'gift_carryover') {
+      return origAcquisitionCause === 'inheritance' || origAcquisitionCause === 'gift';
+    }
+    return false;
+  };
+  
+  const isInheritanceOrGift = isInheritanceOrGiftType();
+  
+  /**
+   * 취득가액 계산방법 옵션 (취득원인에 따라 분기)
+   * 
+   * 1. 상속, 증여, 이월과세(최초 상속/증여):
+   *    - 실지취득가액 (상속세/증여세 평가액)
+   *    - 기준시가
+   *    ※ 환산취득가액은 양도가액 × (취득당시기준시가/양도당시기준시가) 공식을 사용하므로
+   *      실지거래가액이 없는 상속/증여의 경우 사용 불가
+   * 
+   * 2. 매매, 신축, 경매, 이월과세(최초 매매):
+   *    - 실지취득가액
+   *    - 환산취득가액
+   *    ※ 기준시가 방식은 부담부증여 등 특수한 경우에만 사용
+   * 
+   * 3. 부담부증여 + 보충적평가(기준시가):
+   *    - 기준시가만 사용 (선택 불가, 자동 적용)
+   * 
+   * 4. 부담부증여 + 시가:
+   *    - 취득원인에 따른 기존 분기 로직 적용
+   */
+  const getAcquisitionPriceMethodOptions = () => {
+    // 부담부증여 + 보충적평가(기준시가): 기준시가만 사용
+    if (isBurdenGiftOfficial) {
+      return [
+        { id: 'official', label: '기준시가', subLabel: '보충적평가 선택으로 자동 적용' },
+      ];
+    }
+    
+    // 상속/증여/이월과세(최초 상속/증여): 실지취득가액 또는 기준시가
+    if (isInheritanceOrGift) {
+      return [
+        { id: 'actual', label: '실지취득가액', subLabel: '상속세/증여세 평가액' },
+        { id: 'official', label: '기준시가', subLabel: '공시가격 기준' },
+      ];
+    }
+    
+    // 매매/신축/경매/이월과세(최초 매매): 실지취득가액 또는 환산취득가액
+    return [
+      { id: 'actual', label: '실지취득가액', subLabel: '실제 매입가 기준' },
+      { id: 'converted', label: '환산취득가액', subLabel: '기준시가 비율 환산' },
+    ];
+  };
+  
+  const acquisitionPriceMethodOptions = getAcquisitionPriceMethodOptions();
+  
+  // 현재 선택된 방법이 허용되지 않는 경우 초기화
+  React.useEffect(() => {
+    const currentMethod = transaction.amounts?.acquisitionPriceMethod;
+    const allowedMethods = acquisitionPriceMethodOptions.map(o => o.id);
+    
+    // 부담부증여 + 보충적평가: 기준시가로 강제 설정
+    if (isBurdenGiftOfficial && currentMethod !== 'official') {
+      setAcquisitionPriceMethod('official');
+      return;
+    }
+    
+    if (currentMethod && !allowedMethods.includes(currentMethod)) {
+      setAcquisitionPriceMethod('actual');
+    }
+  }, [acquisitionCause, origAcquisitionCause, isBurdenGiftOfficial]);
+  
   return (
     <StepContainer
       title="금액 정보 입력"
@@ -441,6 +560,19 @@ export const AmountsStep: React.FC = () => {
       
       {isBurdenGift && (
         <Section title="부담부증여 정보">
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">증여재산 평가방법</label>
+            <CardSelection
+              options={[
+                { id: 'market', label: '시가', subLabel: '실거래가 또는 감정가' },
+                { id: 'official', label: '보충적 평가', subLabel: '기준시가' },
+              ]}
+              value={transaction.amounts?.giftEvalMethod || 'market'}
+              onChange={(v) => setAmounts({ giftEvalMethod: v as 'market' | 'official' })}
+              columns={2}
+            />
+          </div>
+          
           <div className="grid grid-cols-2 gap-4">
             <NumberInput
               label="증여재산 평가액"
@@ -455,19 +587,42 @@ export const AmountsStep: React.FC = () => {
               suffix="원"
             />
           </div>
+          
+          {transaction.amounts?.giftEvalMethod === 'official' && (
+            <div className="mt-4">
+              <InfoBox type="info">
+                보충적 평가(기준시가)로 증여재산을 평가한 경우, 취득가액도 기준시가로 계산합니다.
+              </InfoBox>
+            </div>
+          )}
+        </Section>
+      )}
+      
+      {acquisitionCause === 'gift_carryover' && (
+        <Section title="이월과세 증여세">
+          <NumberInput
+            label="기납부 증여세"
+            value={transaction.amounts?.giftTaxPaid || 0}
+            onChange={(v) => setAmounts({ giftTaxPaid: v })}
+            suffix="원"
+            hint="증여 시 납부한 증여세액을 입력하세요. 양도소득세에서 공제됩니다."
+          />
         </Section>
       )}
       
       <Section title="취득가액">
+        {isInheritanceOrGift && (
+          <InfoBox type="info">
+            상속·증여 취득의 경우 환산취득가액 방식을 사용할 수 없습니다.
+            실지취득가액(상속세/증여세 평가액) 또는 기준시가만 선택 가능합니다.
+          </InfoBox>
+        )}
+        
         <CardSelection
-          options={[
-            { id: 'actual', label: '실지취득가액', subLabel: '실제 매입가 기준' },
-            { id: 'converted', label: '환산취득가액', subLabel: '기준시가 비율 환산' },
-            { id: 'official', label: '기준시가', subLabel: '공시가격 기준' },
-          ]}
+          options={acquisitionPriceMethodOptions}
           value={transaction.amounts?.acquisitionPriceMethod || 'actual'}
           onChange={(v) => setAcquisitionPriceMethod(v as any)}
-          columns={3}
+          columns={2}
         />
         
         {transaction.amounts?.acquisitionPriceMethod === 'actual' && (
