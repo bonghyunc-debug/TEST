@@ -1,11 +1,16 @@
 {
   "name": "smart-capital-gain-wizard",
-  "version": "1.0.0",
+  "version": "1.2.0",
+  "description": "양도소득세 간편신고 도우미 - 부동산/주식 양도소득세 계산 및 신고서 작성 지원",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "version:patch": "node scripts/version-update.cjs patch",
+    "version:minor": "node scripts/version-update.cjs minor",
+    "version:major": "node scripts/version-update.cjs major",
+    "status": "node scripts/project-status.cjs"
   },
   "dependencies": {
     "react": "^18.2.0",
